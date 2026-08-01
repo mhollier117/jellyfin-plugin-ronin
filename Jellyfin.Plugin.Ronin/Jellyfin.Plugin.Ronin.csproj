@@ -3,12 +3,13 @@
   <PropertyGroup>
     <JellyfinVersion Condition="'$(JellyfinVersion)' == ''">12.0</JellyfinVersion>
     <RootNamespace>Jellyfin.Plugin.Ronin</RootNamespace>
+    <CopyLocalLockFileAssemblies>true</CopyLocalLockFileAssemblies>
     <GenerateDocumentationFile>true</GenerateDocumentationFile>
     <TreatWarningsAsErrors>false</TreatWarningsAsErrors>
     <Nullable>enable</Nullable>
     <AnalysisMode>Default</AnalysisMode>
     <CodeAnalysisRuleSet>../jellyfin.ruleset</CodeAnalysisRuleSet>
-    <AssemblyVersion>1.0.2.0</AssemblyVersion>
+    <AssemblyVersion>1.0.3.0</AssemblyVersion>
     <Version>1.0.0.1</Version>
   </PropertyGroup>
 
