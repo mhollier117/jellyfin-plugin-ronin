@@ -257,12 +257,28 @@ public class MergeAnimeSeasonsTask : IScheduledTask
                                 ).ConfigureAwait(false);
                             }
                         }
-                        // Delete empty seasons that aren't Season 1 (or 0)
-                        if (season.IndexNumber > 1)
+                        // Delete seasons above 1 ONLY when provably childless.
+                        // Jellyfin cascades parent->child deletes, so removing a
+                        // season that still holds episodes destroys those library
+                        // entries (see SeasonCleanup).
+                        var remaining = _libraryManager.GetItemList(new InternalItemsQuery
+                        {
+                            Parent = season,
+                            IncludeItemTypes = [BaseItemKind.Episode]
+                        }).Count;
+
+                        if (SeasonCleanup.ShouldDeleteSeason(season.IndexNumber, remaining))
                         {
                             _logger.LogInformation("Removing empty season: {Series} - Season {Number}", series?.Name, season.IndexNumber);
-                            // Directly delete. We know it's empty because we just moved all episodes to Season 1.
                             _libraryManager.DeleteItem(season, new DeleteOptions { DeleteFileLocation = false });
+                        }
+                        else if (season.IndexNumber > 1)
+                        {
+                            _logger.LogWarning(
+                                "Keeping {Series} - Season {Number}: {Count} episode(s) still attached; deleting it would remove them",
+                                series?.Name,
+                                season.IndexNumber,
+                                remaining);
                         }
                     }
                 }
