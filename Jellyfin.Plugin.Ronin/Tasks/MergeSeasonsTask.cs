@@ -186,14 +186,26 @@ public class MergeAnimeSeasonsTask : IScheduledTask
 
                 }
 
-                await _libraryManager.UpdateItemAsync(
-                    episode,
-                    episode,
-                    ItemUpdateType.MetadataEdit,
-                    cancellationToken
-                ).ConfigureAwait(false);
+                try
+                {
+                    await _libraryManager.UpdateItemAsync(
+                        episode,
+                        episode,
+                        ItemUpdateType.MetadataEdit,
+                        cancellationToken
+                    ).ConfigureAwait(false);
 
-                seriesModified = true;
+                    seriesModified = true;
+                }
+                catch (Exception ex) when (ex is not OperationCanceledException)
+                {
+                    // One bad episode must never end the run (see HttpRetry).
+                    _logger.LogWarning(
+                        ex,
+                        "Skipping {Series} - {Episode}: update failed",
+                        series?.Name,
+                        episode.Name);
+                }
 
                 episodeProcessed++;
                 progress?.Report((seriesProcessed + (episodeProcessed / episodes.Count)) / seriesList.Count * 100);

@@ -14,6 +14,9 @@ namespace Jellyfin.Plugin.Ronin.Helpers;
 /// </summary>
 public static class ResolveSeasonNumber
 {
+    /// <summary>Transient-failure attempts per lookup before falling back.</summary>
+    private const int MaxAttempts = 3;
+
     /// <summary>
     /// Resolves a relative aired season number from TheTVDB.
     /// Requires the Tvdb series ID or slug and the episode ID.
@@ -30,13 +33,19 @@ public static class ResolveSeasonNumber
 
         if (url is null) return 1;
 
-        using var request = new HttpRequestMessage(HttpMethod.Get, url);
-        request.Headers.UserAgent.ParseAdd("Mozilla/5.0 (Windows NT 10.0; Win64; x64)");
+        using var response = await HttpRetry.SendWithRetryAsync(
+            client,
+            () =>
+            {
+                var r = new HttpRequestMessage(HttpMethod.Get, url);
+                r.Headers.UserAgent.ParseAdd("Mozilla/5.0 (Windows NT 10.0; Win64; x64)");
+                return r;
+            },
+            MaxAttempts,
+            d => Task.Delay(d, cancellationToken),
+            cancellationToken).ConfigureAwait(false);
 
-        var response = await client.SendAsync(request, cancellationToken)
-            .ConfigureAwait(false);
-
-        if (!response.IsSuccessStatusCode)
+        if (response is null || !response.IsSuccessStatusCode)
             return 1;
 
         var html = await response.Content.ReadAsStringAsync(cancellationToken)

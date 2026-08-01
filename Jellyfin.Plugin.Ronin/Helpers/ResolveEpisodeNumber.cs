@@ -13,6 +13,9 @@ namespace Jellyfin.Plugin.Ronin.Helpers;
 /// </summary>
 public static class ResolveEpisodeNumber
 {
+    /// <summary>Transient-failure attempts per lookup before skipping the item.</summary>
+    private const int MaxAttempts = 3;
+
     /// <summary>
     /// Resolves an absolute episode number from AniDB given an episode ID.
     /// </summary>
@@ -21,11 +24,18 @@ public static class ResolveEpisodeNumber
     {
         if (string.IsNullOrEmpty(anidbEpisodeId)) return null;
         var url = $"https://anidb.net/episode/{anidbEpisodeId}";
-        using var request = new HttpRequestMessage(HttpMethod.Get, url);
-        request.Headers.Add("User-Agent", "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko)");
-
-        var response = await client.SendAsync(request, cancellationToken).ConfigureAwait(false);
-        if (!response.IsSuccessStatusCode) return null;
+        using var response = await HttpRetry.SendWithRetryAsync(
+            client,
+            () =>
+            {
+                var r = new HttpRequestMessage(HttpMethod.Get, url);
+                r.Headers.Add("User-Agent", "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko)");
+                return r;
+            },
+            MaxAttempts,
+            d => Task.Delay(d, cancellationToken),
+            cancellationToken).ConfigureAwait(false);
+        if (response is null || !response.IsSuccessStatusCode) return null;
 
         var html = await response.Content.ReadAsStringAsync(cancellationToken).ConfigureAwait(false);
         var match = Regex.Match(html, @"- (\d+) -");
@@ -59,11 +69,18 @@ public static class ResolveEpisodeNumber
 
         if (url is null) return null;
 
-        using var request = new HttpRequestMessage(HttpMethod.Get, url);
-        request.Headers.UserAgent.ParseAdd("Mozilla/5.0 (Windows NT 10.0; Win64; x64)");
-
-        var response = await client.SendAsync(request, cancellationToken).ConfigureAwait(false);
-        if (!response.IsSuccessStatusCode) return null;
+        using var response = await HttpRetry.SendWithRetryAsync(
+            client,
+            () =>
+            {
+                var r = new HttpRequestMessage(HttpMethod.Get, url);
+                r.Headers.UserAgent.ParseAdd("Mozilla/5.0 (Windows NT 10.0; Win64; x64)");
+                return r;
+            },
+            MaxAttempts,
+            d => Task.Delay(d, cancellationToken),
+            cancellationToken).ConfigureAwait(false);
+        if (response is null || !response.IsSuccessStatusCode) return null;
 
         var html = await response.Content.ReadAsStringAsync(cancellationToken).ConfigureAwait(false);
 
@@ -106,11 +123,18 @@ public static class ResolveEpisodeNumber
 
         if (url is null) return null;
 
-        using var request = new HttpRequestMessage(HttpMethod.Get, url);
-        request.Headers.UserAgent.ParseAdd("Mozilla/5.0 (Windows NT 10.0; Win64; x64)");
-
-        var response = await client.SendAsync(request, cancellationToken).ConfigureAwait(false);
-        if (!response.IsSuccessStatusCode) return null;
+        using var response = await HttpRetry.SendWithRetryAsync(
+            client,
+            () =>
+            {
+                var r = new HttpRequestMessage(HttpMethod.Get, url);
+                r.Headers.UserAgent.ParseAdd("Mozilla/5.0 (Windows NT 10.0; Win64; x64)");
+                return r;
+            },
+            MaxAttempts,
+            d => Task.Delay(d, cancellationToken),
+            cancellationToken).ConfigureAwait(false);
+        if (response is null || !response.IsSuccessStatusCode) return null;
 
         var html = await response.Content.ReadAsStringAsync(cancellationToken).ConfigureAwait(false);
 
