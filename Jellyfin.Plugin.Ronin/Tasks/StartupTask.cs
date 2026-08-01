@@ -48,7 +48,11 @@ public class StartupTask : IScheduledTask
     {
         yield return new TaskTriggerInfo
         {
+#if JELLYFIN_10_10
+            Type = TaskTriggerInfo.TriggerStartup
+#else
             Type = TaskTriggerInfoType.StartupTrigger
+#endif
         };
     }
 

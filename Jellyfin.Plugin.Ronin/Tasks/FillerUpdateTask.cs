@@ -73,7 +73,11 @@ public class FillerUpdateTask : IScheduledTask
     {
         yield return new TaskTriggerInfo
         {
+#if JELLYFIN_10_10
+            Type = TaskTriggerInfo.TriggerInterval,
+#else
             Type = TaskTriggerInfoType.IntervalTrigger,
+#endif
             IntervalTicks = TimeSpan.FromHours(24).Ticks
         };
     }

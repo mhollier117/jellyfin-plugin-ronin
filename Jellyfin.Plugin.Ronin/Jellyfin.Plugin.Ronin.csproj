@@ -1,22 +1,36 @@
-﻿<Project Sdk="Microsoft.NET.Sdk">
+<Project Sdk="Microsoft.NET.Sdk">
 
   <PropertyGroup>
-    <TargetFramework>net9.0</TargetFramework>
+    <JellyfinVersion Condition="'$(JellyfinVersion)' == ''">12.0</JellyfinVersion>
     <RootNamespace>Jellyfin.Plugin.Ronin</RootNamespace>
     <GenerateDocumentationFile>true</GenerateDocumentationFile>
     <TreatWarningsAsErrors>false</TreatWarningsAsErrors>
     <Nullable>enable</Nullable>
-    <AnalysisMode>AllEnabledByDefault</AnalysisMode>
+    <AnalysisMode>Default</AnalysisMode>
     <CodeAnalysisRuleSet>../jellyfin.ruleset</CodeAnalysisRuleSet>
     <AssemblyVersion>1.0.2.0</AssemblyVersion>
     <Version>1.0.0.1</Version>
   </PropertyGroup>
 
+  <PropertyGroup Condition="$(JellyfinVersion.StartsWith('12.'))">
+    <TargetFramework>net10.0</TargetFramework>
+    <JellyfinPackageVersion>12.0.0-rc2</JellyfinPackageVersion>
+  </PropertyGroup>
+  <PropertyGroup Condition="$(JellyfinVersion.StartsWith('10.11'))">
+    <TargetFramework>net9.0</TargetFramework>
+    <JellyfinPackageVersion>10.11.0</JellyfinPackageVersion>
+  </PropertyGroup>
+  <PropertyGroup Condition="$(JellyfinVersion.StartsWith('10.10'))">
+    <TargetFramework>net8.0</TargetFramework>
+    <JellyfinPackageVersion>10.10.7</JellyfinPackageVersion>
+    <DefineConstants>$(DefineConstants);JELLYFIN_10_10</DefineConstants>
+  </PropertyGroup>
+
   <ItemGroup>
-    <PackageReference Include="Jellyfin.Controller" Version="10.11.3" >
+    <PackageReference Include="Jellyfin.Controller" Version="$(JellyfinPackageVersion)" >
       <ExcludeAssets>runtime</ExcludeAssets>
     </PackageReference>
-    <PackageReference Include="Jellyfin.Model" Version="10.11.3">
+    <PackageReference Include="Jellyfin.Model" Version="$(JellyfinPackageVersion)">
       <ExcludeAssets>runtime</ExcludeAssets>
     </PackageReference>
     <PackageReference Include="HtmlAgilityPack" Version="1.11.71" />

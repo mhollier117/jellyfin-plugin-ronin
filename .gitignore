@@ -1,8 +1,4 @@
-source-projects/
 bin/
 obj/
-.vs/
-.idea/
-artifacts
-graveyard/
-Jellyfin-Ronin.sln
+release/
+*.user
