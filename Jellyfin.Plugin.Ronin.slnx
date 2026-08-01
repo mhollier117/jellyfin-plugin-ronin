@@ -1,0 +1,6 @@
+<Solution>
+  <Folder Name="/tests/">
+    <Project Path="tests/Jellyfin.Plugin.Ronin.Tests/Jellyfin.Plugin.Ronin.Tests.csproj" />
+  </Folder>
+  <Project Path="Jellyfin.Plugin.Ronin/Jellyfin.Plugin.Ronin.csproj" />
+</Solution>
