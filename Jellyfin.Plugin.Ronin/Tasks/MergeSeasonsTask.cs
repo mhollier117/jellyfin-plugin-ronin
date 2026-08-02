@@ -28,7 +28,7 @@ public class MergeAnimeSeasonsTask : IScheduledTask
     private readonly IDirectoryService _directoryService;
     private readonly ILogger<MergeAnimeSeasonsTask> _logger;
     private readonly IHttpClientFactory _httpClientFactory;
-    private readonly PluginConfiguration _config;
+    private readonly Func<PluginConfiguration> _configProvider;
 
     /// <summary>
     /// Initializes a new instance of the <see cref="MergeAnimeSeasonsTask"/> class.
@@ -38,7 +38,7 @@ public class MergeAnimeSeasonsTask : IScheduledTask
     /// <param name="logger">Logger for diagnostics.</param>
     /// /// <param name="httpClientFactory">Factory for creating HTTP clients used for external API calls.</param>
     public MergeAnimeSeasonsTask(ILibraryManager libraryManager, IDirectoryService directoryService, ILogger<MergeAnimeSeasonsTask> logger, IHttpClientFactory httpClientFactory)
-        : this(libraryManager, directoryService, logger, httpClientFactory, Plugin.Instance?.Configuration ?? new PluginConfiguration())
+        : this(libraryManager, directoryService, logger, httpClientFactory, static () => Plugin.Instance?.Configuration ?? new PluginConfiguration())
     {
     }
 
@@ -51,18 +51,37 @@ public class MergeAnimeSeasonsTask : IScheduledTask
     /// <param name="httpClientFactory">Factory for creating HTTP clients used for external API calls.</param>
     /// <param name="configuration">The plugin configuration to use.</param>
     internal MergeAnimeSeasonsTask(ILibraryManager libraryManager, IDirectoryService directoryService, ILogger<MergeAnimeSeasonsTask> logger, IHttpClientFactory httpClientFactory, PluginConfiguration configuration)
+        : this(libraryManager, directoryService, logger, httpClientFactory, () => configuration)
+    {
+    }
+
+    /// <summary>
+    /// Initializes a new instance of the <see cref="MergeAnimeSeasonsTask"/> class with a configuration provider.
+    /// </summary>
+    /// <param name="libraryManager">Service for accessing library items.</param>
+    /// <param name="directoryService">Service for directory operations.</param>
+    /// <param name="logger">Logger for diagnostics.</param>
+    /// <param name="httpClientFactory">Factory for creating HTTP clients used for external API calls.</param>
+    /// <param name="configurationProvider">Resolves the plugin configuration.</param>
+    internal MergeAnimeSeasonsTask(ILibraryManager libraryManager, IDirectoryService directoryService, ILogger<MergeAnimeSeasonsTask> logger, IHttpClientFactory httpClientFactory, Func<PluginConfiguration> configurationProvider)
     {
         _libraryManager = libraryManager;
         _directoryService = directoryService;
         _logger = logger;
         _httpClientFactory = httpClientFactory;
-        _config = configuration;
+        _configProvider = configurationProvider;
     }
 
-    private bool RefreshSeriesAfterProcessed => _config.RefreshSeriesAfterProcessed;
-    private int RequestDelayMs => (_config.DbRateLimitMs > 0) ? _config.DbRateLimitMs : 2000;
-    private bool RenameWhenSingleSeason => _config.RenameWhenSingleSeason;
-    private string SingleSeasonName => string.IsNullOrWhiteSpace(_config.SingleSeasonName) ? "Episodes" : _config.SingleSeasonName;
+    /// <summary>Gets the live plugin configuration. Resolved through the
+    /// provider on every access: BasePlugin.UpdateConfiguration replaces the
+    /// Configuration object, so a value captured at construction goes stale
+    /// (TaskManager constructs tasks once, at server startup).</summary>
+    private PluginConfiguration Config => _configProvider();
+
+    private bool RefreshSeriesAfterProcessed => Config.RefreshSeriesAfterProcessed;
+    private int RequestDelayMs => (Config.DbRateLimitMs > 0) ? Config.DbRateLimitMs : 2000;
+    private bool RenameWhenSingleSeason => Config.RenameWhenSingleSeason;
+    private string SingleSeasonName => string.IsNullOrWhiteSpace(Config.SingleSeasonName) ? "Episodes" : Config.SingleSeasonName;
 
     /// <inheritdoc />
     public string Name => "⚠ Global Anime Re-Org: Force Single Season";
@@ -96,7 +115,7 @@ public class MergeAnimeSeasonsTask : IScheduledTask
             return;
         }
 
-        var seriesList = CollectAnimeSeries.Execute(_libraryManager, _config, _logger);
+        var seriesList = CollectAnimeSeries.Execute(_libraryManager, Config, _logger);
 
         progress?.Report(0);
 

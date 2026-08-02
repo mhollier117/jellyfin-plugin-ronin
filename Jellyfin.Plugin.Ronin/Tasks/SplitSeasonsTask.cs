@@ -27,7 +27,7 @@ public class SplitSeasonsTask : IScheduledTask
     private readonly IDirectoryService _directoryService;
     private readonly ILogger<SplitSeasonsTask> _logger;
     private readonly IHttpClientFactory _httpClientFactory;
-    private readonly PluginConfiguration _config;
+    private readonly Func<PluginConfiguration> _configProvider;
 
     /// <summary>
     /// Initializes a new instance of the <see cref="SplitSeasonsTask"/> class.
@@ -41,7 +41,7 @@ public class SplitSeasonsTask : IScheduledTask
         IDirectoryService directoryService,
         ILogger<SplitSeasonsTask> logger,
         IHttpClientFactory httpClientFactory)
-        : this(libraryManager, directoryService, logger, httpClientFactory, Plugin.Instance?.Configuration ?? new PluginConfiguration())
+        : this(libraryManager, directoryService, logger, httpClientFactory, static () => Plugin.Instance?.Configuration ?? new PluginConfiguration())
     {
     }
 
@@ -59,22 +59,46 @@ public class SplitSeasonsTask : IScheduledTask
         ILogger<SplitSeasonsTask> logger,
         IHttpClientFactory httpClientFactory,
         PluginConfiguration configuration)
+        : this(libraryManager, directoryService, logger, httpClientFactory, () => configuration)
+    {
+    }
+
+    /// <summary>
+    /// Initializes a new instance of the <see cref="SplitSeasonsTask"/> class with a configuration provider.
+    /// </summary>
+    /// <param name="libraryManager">The Jellyfin library manager used to query media items.</param>
+    /// <param name="directoryService">Service for directory operations.</param>
+    /// <param name="logger">Logger for diagnostic output.</param>
+    /// <param name="httpClientFactory">Factory for creating HTTP clients used for external API calls.</param>
+    /// <param name="configurationProvider">Resolves the plugin configuration.</param>
+    internal SplitSeasonsTask(
+        ILibraryManager libraryManager,
+        IDirectoryService directoryService,
+        ILogger<SplitSeasonsTask> logger,
+        IHttpClientFactory httpClientFactory,
+        Func<PluginConfiguration> configurationProvider)
     {
         _libraryManager = libraryManager;
         _directoryService = directoryService;
         _logger = logger;
         _httpClientFactory = httpClientFactory;
-        _config = configuration;
+        _configProvider = configurationProvider;
     }
+
+    /// <summary>Gets the live plugin configuration. Resolved through the
+    /// provider on every access: BasePlugin.UpdateConfiguration replaces the
+    /// Configuration object, so a value captured at construction goes stale
+    /// (TaskManager constructs tasks once, at server startup).</summary>
+    private PluginConfiguration Config => _configProvider();
 
     /// <summary>
     /// Gets the rate limit in milliseconds applied between outbound AniDB/AnimeFillerList requests.
     /// </summary>
-    private int RequestDelayMs => (_config.DbRateLimitMs > 0) ? _config.DbRateLimitMs : 2000;
+    private int RequestDelayMs => (Config.DbRateLimitMs > 0) ? Config.DbRateLimitMs : 2000;
     /// <summary>
     /// Gets the user preference for automatically refreshing series metadata to update the interface after changes are applied.
     /// </summary>
-    private bool RefreshSeriesAfterProcessed => _config.RefreshSeriesAfterProcessed;
+    private bool RefreshSeriesAfterProcessed => Config.RefreshSeriesAfterProcessed;
 
     /// <inheritdoc />
     public string Name => "⚠ Global Anime Re-Org: Organize in Aired Seasons";
@@ -107,7 +131,7 @@ public class SplitSeasonsTask : IScheduledTask
             return;
         }
 
-        var seriesList = CollectAnimeSeries.Execute(_libraryManager, _config, _logger);
+        var seriesList = CollectAnimeSeries.Execute(_libraryManager, Config, _logger);
 
         progress?.Report(0);
 
