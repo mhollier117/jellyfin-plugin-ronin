@@ -9,6 +9,7 @@ using MediaBrowser.Controller.Entities.TV;
 using MediaBrowser.Controller.Library;
 using Microsoft.AspNetCore.Authorization;
 using Microsoft.AspNetCore.Mvc;
+using Microsoft.Extensions.Logging;
 
 namespace Jellyfin.Plugin.Ronin.Api;
 
@@ -21,12 +22,31 @@ namespace Jellyfin.Plugin.Ronin.Api;
 public class EmptySeasonsController : ControllerBase
 {
     private readonly ILibraryManager _libraryManager;
+    private readonly Func<PluginConfiguration> _configProvider;
+    private readonly ILogger<EmptySeasonsController> _logger;
 
     /// <summary>
     /// Initializes a new instance of the <see cref="EmptySeasonsController"/> class.
     /// </summary>
     /// <param name="libraryManager">The Jellyfin library manager used to query media items.</param>
-    public EmptySeasonsController(ILibraryManager libraryManager) => _libraryManager = libraryManager;
+    /// <param name="logger">Logger for diagnostics.</param>
+    public EmptySeasonsController(ILibraryManager libraryManager, ILogger<EmptySeasonsController> logger)
+        : this(libraryManager, logger, static () => Plugin.Instance?.Configuration ?? new PluginConfiguration())
+    {
+    }
+
+    /// <summary>
+    /// Initializes a new instance of the <see cref="EmptySeasonsController"/> class with a configuration provider (used by tests).
+    /// </summary>
+    /// <param name="libraryManager">The Jellyfin library manager used to query media items.</param>
+    /// <param name="logger">Logger for diagnostics.</param>
+    /// <param name="configurationProvider">Resolves the plugin configuration.</param>
+    internal EmptySeasonsController(ILibraryManager libraryManager, ILogger<EmptySeasonsController> logger, Func<PluginConfiguration> configurationProvider)
+    {
+        _libraryManager = libraryManager;
+        _logger = logger;
+        _configProvider = configurationProvider;
+    }
 
     /// <summary>
     /// Filters the supplied item ids down to seasons that should be hidden:
@@ -39,22 +59,25 @@ public class EmptySeasonsController : ControllerBase
     [Authorize]
     public ActionResult<IReadOnlyList<string>> HiddenSeasons([FromQuery] string? ids)
     {
-        var config = Plugin.Instance?.Configuration ?? new PluginConfiguration();
+        var config = _configProvider();
         if (!config.HideEmptySeasons || string.IsNullOrWhiteSpace(ids))
         {
             return Ok(Array.Empty<string>());
         }
 
-        var seasons = ids
+        var parsed = ids
             .Split(',', StringSplitOptions.RemoveEmptyEntries | StringSplitOptions.TrimEntries)
             .Select(s => Guid.TryParse(s, out var g) ? g : Guid.Empty)
             .Where(g => g != Guid.Empty)
+            .ToList();
+
+        var seasons = parsed
             .Select(_libraryManager.GetItemById)
             .OfType<Season>()
-            .Where(s => LibraryScope.IsInScope(config.LibraryIds, s.GetAncestorIds()))
             .ToList();
 
         var hidden = new List<string>();
+        var inScopeCount = 0;
         foreach (var group in seasons.GroupBy(s => s.SeriesId))
         {
             var series = _libraryManager.GetItemById(group.Key);
@@ -62,6 +85,16 @@ public class EmptySeasonsController : ControllerBase
             {
                 continue;
             }
+
+            // Scope is decided on the SERIES ancestors - the exact call the
+            // merge task uses in production - rather than per-season, so
+            // stale season items with unusual parent chains cannot dodge it.
+            if (!LibraryScope.IsInScope(config.LibraryIds, series.GetAncestorIds()))
+            {
+                continue;
+            }
+
+            inScopeCount += group.Count();
 
             // Virtual placeholders are intentionally included: a season whose
             // only content is missing-episode placeholders still has a view.
@@ -78,6 +111,13 @@ public class EmptySeasonsController : ControllerBase
                 .Compute(group.Select(s => (s.Id, s.IndexNumber)), episodeSeasonIds)
                 .Select(g => g.ToString("N")));
         }
+
+        _logger.LogInformation(
+            "Ronin HiddenSeasons: {Parsed} ids, {Seasons} seasons, {InScope} in scope, {Hidden} hidden",
+            parsed.Count,
+            seasons.Count,
+            inScopeCount,
+            hidden.Count);
 
         return Ok(hidden);
     }

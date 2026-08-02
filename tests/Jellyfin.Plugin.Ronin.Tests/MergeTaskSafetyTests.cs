@@ -32,6 +32,7 @@ using Xunit;
 
 namespace Jellyfin.Plugin.Ronin.Tests;
 
+[Collection("BaseItemStatics")]
 public sealed class MergeTaskSafetyTests
 {
     private static readonly Guid AnimeLibId = Guid.Parse("aaaaaaaa-bbbb-cccc-dddd-eeeeeeeeeeee");
