@@ -23,8 +23,8 @@ public static class TransformationPatch
 
         var config = Plugin.Instance?.Configuration ?? new PluginConfiguration();
 
-        // If all badge displays are disabled, do NOT inject anything.
-        if (!config.ShowBadgesOnEpisodePage && !config.ShowBadgesOnSeasonList)
+        // If every frontend feature is disabled, do NOT inject anything.
+        if (!config.ShowBadgesOnEpisodePage && !config.ShowBadgesOnSeasonList && !config.HideEmptySeasons)
             return payload.Contents;
 
         // Hardcoded configuration for frontend usage
@@ -33,17 +33,20 @@ public static class TransformationPatch
 window.RoninVariables = {{
     RONIN_SHOW_EPISODE_BADGES: {config.ShowBadgesOnEpisodePage.ToString().ToLowerInvariant()},
     RONIN_SHOW_SEASON_LIST_BADGES: {config.ShowBadgesOnSeasonList.ToString().ToLowerInvariant()},
-    RONIN_ENABLE_BADGE_COLORS: {config.EnableBadgeColors.ToString().ToLowerInvariant()}
+    RONIN_ENABLE_BADGE_COLORS: {config.EnableBadgeColors.ToString().ToLowerInvariant()},
+    RONIN_HIDE_EMPTY_SEASONS: {config.HideEmptySeasons.ToString().ToLowerInvariant()}
 }};
 </script>";
 
         string importedJS = ReadEmbeddedResource($"{typeof(Plugin).Namespace}.Inject.ronin.js");
         string importedCSS = ReadEmbeddedResource($"{typeof(Plugin).Namespace}.Inject.ronin.css");
+        string hideSeasonsJS = ReadEmbeddedResource($"{typeof(Plugin).Namespace}.Inject.ronin-hideseasons.js");
 
         // Inject Config JS and CSS before </head>
-        string result = Regex.Replace(payload.Contents, "(</head>)", $"{configScript}<style>{importedCSS}</style>$1", RegexOptions.IgnoreCase);
+        string hideCss = ".ronin-hidden-season{display:none !important}";
+        string result = Regex.Replace(payload.Contents, "(</head>)", $"{configScript}<style>{importedCSS}{hideCss}</style>$1", RegexOptions.IgnoreCase);
         // Inject Config and JS before </body>
-        result = Regex.Replace(result, "(</body>)", $"{configScript}<script defer>{importedJS}</script>$1", RegexOptions.IgnoreCase);
+        result = Regex.Replace(result, "(</body>)", $"{configScript}<script defer>{importedJS}</script><script defer>{hideSeasonsJS}</script>$1", RegexOptions.IgnoreCase);
 
         return result;
     }

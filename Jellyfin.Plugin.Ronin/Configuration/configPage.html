@@ -109,6 +109,18 @@
                     <div class="fieldDescription">The name to use for the single season when merging all seasons into one. Default: Episodes</div>
                 </div>
 
+                <div class="checkboxContainer checkboxContainer-withDescription">
+                    <label class="emby-checkbox-label">
+                        <input type="checkbox" id="HideEmptySeasons" is="emby-checkbox" class="emby-checkbox" data-id="HideEmptySeasons" />
+                        <span class="checkboxLabel">Hide empty seasons in the web UI (merged look)</span>
+                        <span class="checkboxOutline">
+                            <span class="material-icons checkboxIcon checkboxIcon-checked check" aria-hidden="true"></span>
+                            <span class="material-icons checkboxIcon checkboxIcon-unchecked " aria-hidden="true"></span>
+                        </span>
+                    </label>
+                    <div class="fieldDescription">After merging, physical "Season NN" folders keep their season rows alive even though every episode now lives in Season 1. This hides season rows that no episode references - presentation only, no files or library data are changed. Season 1 and Specials are never hidden.</div>
+                </div>
+
                 <button id="saveConfig" is="emby-button" type="submit" class="emby-button raised button-submit block">
                     <span>Save</span>
                 </button>
@@ -198,6 +210,7 @@
                                 config?.SingleSeasonName && config.SingleSeasonName.trim() !== ""
                                     ? config.SingleSeasonName
                                     : 'Episodes';
+                            document.querySelector("[data-id=HideEmptySeasons]").checked = config.HideEmptySeasons !== false;
                             RoninConfig.updateStates();
                         })
                         .catch(function (error) {
@@ -222,6 +235,7 @@
                         RefreshSeriesAfterProcessed: document.querySelector("[data-id=RefreshSeriesAfterProcessed]").checked,
                         RenameWhenSingleSeason: document.querySelector("[data-id=RenameWhenSingleSeason]").checked,
                         SingleSeasonName: document.querySelector("[data-id=SingleSeasonName]").value,
+                        HideEmptySeasons: document.querySelector("[data-id=HideEmptySeasons]").checked,
                         LibraryIds: RoninConfig.selectedLibraryIds()
                     };
                     window.ApiClient.updatePluginConfiguration(RoninConfig.pluginId, config)

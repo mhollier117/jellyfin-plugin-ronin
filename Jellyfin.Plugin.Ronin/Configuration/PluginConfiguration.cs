@@ -61,6 +61,13 @@ public class PluginConfiguration : BasePluginConfiguration
     /// no-ops until an admin selects at least one library.
     /// </summary>
     public string[] LibraryIds { get; set; } = System.Array.Empty<string>();
+
+    /// <summary>
+    /// Gets or sets a value indicating whether season rows that no episode
+    /// references (display-empty physical folders left behind by the merge)
+    /// are hidden in the web UI. Presentation only; no library data changes.
+    /// </summary>
+    public bool HideEmptySeasons { get; set; } = true;
 }
 
 /// <summary>
