@@ -38,12 +38,25 @@ public class MergeAnimeSeasonsTask : IScheduledTask
     /// <param name="logger">Logger for diagnostics.</param>
     /// /// <param name="httpClientFactory">Factory for creating HTTP clients used for external API calls.</param>
     public MergeAnimeSeasonsTask(ILibraryManager libraryManager, IDirectoryService directoryService, ILogger<MergeAnimeSeasonsTask> logger, IHttpClientFactory httpClientFactory)
+        : this(libraryManager, directoryService, logger, httpClientFactory, Plugin.Instance?.Configuration ?? new PluginConfiguration())
+    {
+    }
+
+    /// <summary>
+    /// Initializes a new instance of the <see cref="MergeAnimeSeasonsTask"/> class with an explicit configuration (used by tests).
+    /// </summary>
+    /// <param name="libraryManager">Service for accessing library items.</param>
+    /// <param name="directoryService">Service for directory operations.</param>
+    /// <param name="logger">Logger for diagnostics.</param>
+    /// <param name="httpClientFactory">Factory for creating HTTP clients used for external API calls.</param>
+    /// <param name="configuration">The plugin configuration to use.</param>
+    internal MergeAnimeSeasonsTask(ILibraryManager libraryManager, IDirectoryService directoryService, ILogger<MergeAnimeSeasonsTask> logger, IHttpClientFactory httpClientFactory, PluginConfiguration configuration)
     {
         _libraryManager = libraryManager;
         _directoryService = directoryService;
         _logger = logger;
         _httpClientFactory = httpClientFactory;
-        _config = Plugin.Instance?.Configuration ?? new PluginConfiguration();
+        _config = configuration;
     }
 
     private bool RefreshSeriesAfterProcessed => _config.RefreshSeriesAfterProcessed;
@@ -74,7 +87,16 @@ public class MergeAnimeSeasonsTask : IScheduledTask
     {
         _logger.LogInformation("Starting Merge Anime Seasons Task");
 
-        var seriesList = CollectAnimeSeries.Execute(_libraryManager);
+        // Never race a library scan: ValidateChildren re-creating/deleting
+        // rows while we write is one of the proven revert windows (doc B4).
+        if (_libraryManager.IsScanRunning)
+        {
+            _logger.LogWarning("A library scan is running; aborting the merge run. Re-run the task after the scan completes.");
+            progress?.Report(100);
+            return;
+        }
+
+        var seriesList = CollectAnimeSeries.Execute(_libraryManager, _config, _logger);
 
         progress?.Report(0);
 
@@ -84,12 +106,32 @@ public class MergeAnimeSeasonsTask : IScheduledTask
             return;
         }
 
-        var httpClient = _httpClientFactory.CreateClient("RoninHttpClient");    
+        var httpClient = _httpClientFactory.CreateClient("RoninHttpClient");
+        var aniDbBreaker = new ScrapeCircuitBreaker();
+        bool aniDbDisabledLogged = false;
         double seriesProcessed = 0;
 
         foreach (var series in seriesList)
         {
             cancellationToken.ThrowIfCancellationRequested();
+
+            // The Season 1 target item must exist before re-homing (doc B1):
+            // the server will not create a virtual Season 1 for episodes that
+            // live inside physical season folders.
+            var seasons = _libraryManager.GetItemList(new InternalItemsQuery
+            {
+                Parent = series,
+                IncludeItemTypes = [BaseItemKind.Season]
+            }).Cast<Season>().ToList();
+
+            var seasonOne = seasons.FirstOrDefault(s => s.IndexNumber == 1);
+            if (seasonOne is null)
+            {
+                _logger.LogWarning("Skipping {Series}: no Season 1 item to merge into", series?.Name);
+                seriesProcessed++;
+                progress?.Report(seriesProcessed / seriesList.Count * 100);
+                continue;
+            }
 
             var episodes = _libraryManager.GetItemList(new InternalItemsQuery
             {
@@ -112,27 +154,79 @@ public class MergeAnimeSeasonsTask : IScheduledTask
             bool seriesModified = false;
             double episodeProcessed = 0;
 
-            // Check numbering pattern prior to merging
-            var allEpisodeNumbers = episodes
+            // Skip external lookups entirely when the numbering is already
+            // absolute: distinct and strictly increasing across seasons,
+            // gaps allowed (doc D2.3).
+            var numberedPairs = episodes
                 .Where(e => e.IndexNumber.HasValue && e.IndexNumber > 0)
-                .Select(e => e.IndexNumber)
-                .OrderBy(n => n)
+                .Select(e => (e.ParentIndexNumber!.Value, e.IndexNumber!.Value))
                 .ToList();
 
-            // Condition 1: all numbers sequential (absolute numbers)
-            bool isSequentialAbsolute = allEpisodeNumbers.Count > 0
-                && allEpisodeNumbers.Distinct().Count() == allEpisodeNumbers.Count
-                && allEpisodeNumbers.First() == 1
-                && allEpisodeNumbers.Last() == allEpisodeNumbers.Count;
-
-            // Condition 2: likely per-season numbering (episodes repeating 1)
-            bool hasDuplicateOnes = allEpisodeNumbers.GroupBy(n => n).Any(g => g.Count() > 1 && g.Key == 1);
+            bool renumberNeeded = !Numbering.IsAbsoluteNumbering(numberedPairs);
 
             foreach (var episode in episodes)
             {
                 cancellationToken.ThrowIfCancellationRequested();
 
-                if (episode.ParentIndexNumber == 1)
+                int? resolvedAbsolute = null;
+                if (renumberNeeded && episode.ParentIndexNumber != 1)
+                {
+                    // --- 1. Try TVDB first (AniDB 403-blocks this host) ---
+                    if (series != null)
+                    {
+                        resolvedAbsolute = await ResolveEpisodeNumber.AbsoluteFromTvdbAsync(
+                            series.GetProviderId("Tvdb"),
+                            series.GetProviderId("TvdbSlug"),
+                            episode.GetProviderId("Tvdb"),
+                            httpClient,
+                            RequestDelayMs,
+                            cancellationToken
+                        ).ConfigureAwait(false);
+                    }
+
+                    // --- 2. Fallback to AniDB behind a per-run breaker ---
+                    if (!resolvedAbsolute.HasValue || resolvedAbsolute <= 0)
+                    {
+                        resolvedAbsolute = await ResolveEpisodeNumber.AbsoluteFromAniDbAsync(
+                                episode.GetProviderId("AniDB"),
+                                httpClient,
+                                RequestDelayMs,
+                                cancellationToken,
+                                aniDbBreaker
+                        ).ConfigureAwait(false);
+
+                        if (aniDbBreaker.IsOpen && !aniDbDisabledLogged)
+                        {
+                            _logger.LogWarning("AniDB returned 403 Forbidden; disabling AniDB lookups for the remainder of this run");
+                            aniDbDisabledLogged = true;
+                        }
+                    }
+                }
+
+                var plan = MergePlan.Compute(
+                    episode.ParentIndexNumber,
+                    episode.IndexNumber,
+                    episode.SeasonId,
+                    seasonOne.Id,
+                    seasonOne.Name,
+                    renumberNeeded,
+                    resolvedAbsolute);
+
+                if (plan.Outcome == PlanOutcome.SkipEpisode)
+                {
+                    // No partial write: merging without a resolved absolute
+                    // number would collide per-season numbers in Season 1.
+                    // The series converges on a later run (self-healing).
+                    _logger.LogWarning(
+                        "Skipping {Series} - {Episode}: absolute episode number unresolved",
+                        series?.Name,
+                        episode.Name);
+                    episodeProcessed++;
+                    progress?.Report((seriesProcessed + (episodeProcessed / episodes.Count)) / seriesList.Count * 100);
+                    continue;
+                }
+
+                if (plan.Outcome != PlanOutcome.Update)
                 {
                     episodeProcessed++;
                     progress?.Report((seriesProcessed + (episodeProcessed / episodes.Count)) / seriesList.Count * 100);
@@ -146,51 +240,39 @@ public class MergeAnimeSeasonsTask : IScheduledTask
                     episode.ParentIndexNumber
                 );
 
-                episode.ParentIndexNumber = 1;
-                // episode.ParentId = Guid.Empty;
-
-                // --- Recalculate Episode Number if needed ---
-                if (!isSequentialAbsolute || hasDuplicateOnes)
+                // The server's own re-home recipe (SeriesMetadataService.cs:
+                // 279-292): ParentIndexNumber + SeasonId + SeasonName.
+                // NEVER ParentId — scans destructively revert it (doc E2).
+                if (plan.ParentIndexNumber.HasValue)
                 {
+                    episode.ParentIndexNumber = plan.ParentIndexNumber;
+                }
 
-                    int? absoluteNumber = null;
+                if (plan.IndexNumber.HasValue)
+                {
+                    episode.IndexNumber = plan.IndexNumber;
+                }
 
-                    // --- 1. Try TVDB first ---
-                    if (series != null)
-                    {
-                        absoluteNumber = await ResolveEpisodeNumber.AbsoluteFromTvdbAsync(
-                            series.GetProviderId("Tvdb"),
-                            series.GetProviderId("TvdbSlug"),
-                            episode.GetProviderId("Tvdb"),
-                            httpClient,
-                            RequestDelayMs,
-                            cancellationToken
-                        ).ConfigureAwait(false);
-                    }
+                if (plan.SeasonId.HasValue)
+                {
+                    episode.SeasonId = plan.SeasonId.Value;
+                }
 
-                    // --- 2. Fallback to AniDB ---
-                    if (!absoluteNumber.HasValue || absoluteNumber < 0)
-                    {
-                        absoluteNumber = await ResolveEpisodeNumber.AbsoluteFromAniDbAsync(
-                                episode.GetProviderId("AniDB"),
-                                httpClient,
-                                RequestDelayMs,
-                                cancellationToken
-                        ).ConfigureAwait(false);
-                    }
-
-                    if (absoluteNumber.HasValue && absoluteNumber > 0)
-                    {
-                        episode.IndexNumber = absoluteNumber;
-                    }
-
+                if (plan.SeasonName is not null)
+                {
+                    episode.SeasonName = plan.SeasonName;
                 }
 
                 try
                 {
+                    // MetadataEdit ≥ MetadataDownload, so the NFO saver
+                    // rewrites <season>1 on disk — the durability anchor that
+                    // survives even Replace-All refreshes (doc E3.1). The
+                    // parent argument drives folder-cache invalidation and
+                    // must be the physical parent, not the episode.
                     await _libraryManager.UpdateItemAsync(
                         episode,
-                        episode,
+                        episode.GetParent() ?? seasonOne,
                         ItemUpdateType.MetadataEdit,
                         cancellationToken
                     ).ConfigureAwait(false);
@@ -211,13 +293,36 @@ public class MergeAnimeSeasonsTask : IScheduledTask
                 progress?.Report((seriesProcessed + (episodeProcessed / episodes.Count)) / seriesList.Count * 100);
             }
 
-            // Refresh the Series Metadata to update the "Season 1" counts in the UI
             if (RefreshSeriesAfterProcessed && seriesModified)
             {
-                try 
+                try
                 {
+                    // === Rename Season 1 if user requested ===
+                    if (RenameWhenSingleSeason
+                        && !string.Equals(seasonOne.Name, SingleSeasonName, StringComparison.OrdinalIgnoreCase))
+                    {
+                        _logger.LogInformation("Renaming season: {Old} → {New}", seasonOne.Name, SingleSeasonName);
+                        seasonOne.Name = SingleSeasonName;
+
+                        await _libraryManager.UpdateItemAsync(
+                            seasonOne,
+                            seasonOne.GetParent() ?? seasonOne,
+                            ItemUpdateType.MetadataEdit,
+                            cancellationToken
+                        ).ConfigureAwait(false);
+                    }
+
+                    // Refresh the series so the server runs its own guarded
+                    // RemoveObsoleteSeasons (virtual-season cleanup) and its
+                    // end-of-refresh SeasonId fix-up. Ronin itself NEVER
+                    // deletes seasons: LibraryManager.DeleteItem expands
+                    // through the AncestorIds table and would take episodes
+                    // with stale SeasonId references down with the season
+                    // (doc E1.3 — the 2026-08-01 incident). No
+                    // ValidateChildren either: nothing was re-parented, it
+                    // only adds risk and time (doc D2.2).
                     _logger.LogInformation("Refreshing metadata for series: {Series}", series?.Name);
-                    
+
                     var refreshOptions = new MetadataRefreshOptions(_directoryService)
                     {
                         MetadataRefreshMode = MetadataRefreshMode.Default,
@@ -226,60 +331,10 @@ public class MergeAnimeSeasonsTask : IScheduledTask
                         ReplaceAllImages = false,
                         ForceSave = true
                     };
+
                     if (series != null)
                     {
-                        await series.ValidateChildren(new Progress<double>(), CancellationToken.None).ConfigureAwait(false);
                         await series.RefreshMetadata(refreshOptions, CancellationToken.None).ConfigureAwait(false);
-                    }
-
-                    // Find all seasons for this series
-                    var seasons = _libraryManager.GetItemList(new InternalItemsQuery
-                    {
-                        Parent = series,
-                        IncludeItemTypes = [BaseItemKind.Season]
-                    }).Cast<Season>().ToList();
-
-                    foreach (var season in seasons)
-                    {
-                        // === Rename Season 1 if user requested ===
-                        if (season.IndexNumber == 1 && RenameWhenSingleSeason)
-                        {
-                            if (!string.Equals(season.Name, SingleSeasonName, StringComparison.OrdinalIgnoreCase))
-                            {
-                                _logger.LogInformation("Renaming season: {Old} → {New}", season.Name, SingleSeasonName);
-                                season.Name = SingleSeasonName;
-
-                                await _libraryManager.UpdateItemAsync(
-                                    season,
-                                    season,
-                                    ItemUpdateType.MetadataEdit,
-                                    cancellationToken
-                                ).ConfigureAwait(false);
-                            }
-                        }
-                        // Delete seasons above 1 ONLY when provably childless.
-                        // Jellyfin cascades parent->child deletes, so removing a
-                        // season that still holds episodes destroys those library
-                        // entries (see SeasonCleanup).
-                        var remaining = _libraryManager.GetItemList(new InternalItemsQuery
-                        {
-                            Parent = season,
-                            IncludeItemTypes = [BaseItemKind.Episode]
-                        }).Count;
-
-                        if (SeasonCleanup.ShouldDeleteSeason(season.IndexNumber, remaining))
-                        {
-                            _logger.LogInformation("Removing empty season: {Series} - Season {Number}", series?.Name, season.IndexNumber);
-                            _libraryManager.DeleteItem(season, new DeleteOptions { DeleteFileLocation = false });
-                        }
-                        else if (season.IndexNumber > 1)
-                        {
-                            _logger.LogWarning(
-                                "Keeping {Series} - Season {Number}: {Count} episode(s) still attached; deleting it would remove them",
-                                series?.Name,
-                                season.IndexNumber,
-                                remaining);
-                        }
                     }
                 }
                 catch (Exception ex)

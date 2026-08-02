@@ -54,6 +54,13 @@ public class PluginConfiguration : BasePluginConfiguration
     /// Gets or sets the name to assign to the single season when merging all episodes into one season.
     /// </summary>
     public string SingleSeasonName { get; set; } = "Episodes";
+
+    /// <summary>
+    /// Gets or sets the library (virtual folder) item ids Ronin is allowed to
+    /// process. Empty means process nothing (fail-safe default): every task
+    /// no-ops until an admin selects at least one library.
+    /// </summary>
+    public string[] LibraryIds { get; set; } = System.Array.Empty<string>();
 }
 
 /// <summary>

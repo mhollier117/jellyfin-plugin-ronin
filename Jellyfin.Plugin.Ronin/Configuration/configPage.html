@@ -11,6 +11,14 @@
         <div class="content-primary">
             <form id="RoninConfigForm">
 
+                <div class="verticalSection">
+                    <h3 class="sectionTitle">Libraries</h3>
+                    <div class="fieldDescription" style="margin-bottom:.6em">
+                        Ronin processes only the libraries ticked here. Nothing is processed until you pick at least one (after upgrading, re-select your anime library once).
+                    </div>
+                    <div id="RoninLibraryList"></div>
+                </div>
+
                 <div class="checkboxContainer checkboxContainer-withDescription">
                     <label class="emby-checkbox-label">
                         <input type="checkbox" id="ShowBadgesOnEpisodePage" is="emby-checkbox" class="emby-checkbox" data-id="ShowBadgesOnEpisodePage" />
@@ -112,6 +120,36 @@
 
                 btnSave: document.querySelector("#saveConfig"),
 
+                escapeHtml: function (s) {
+                    const d = document.createElement("div");
+                    d.textContent = s == null ? "" : String(s);
+                    return d.innerHTML;
+                },
+
+                normalizeLibraryId: function (s) {
+                    return String(s).replace(/-/g, "").toLowerCase();
+                },
+
+                renderLibraries: function (config, libraries) {
+                    const selected = (config.LibraryIds || []).map(RoninConfig.normalizeLibraryId);
+                    document.querySelector("#RoninLibraryList").innerHTML = (libraries || [])
+                        .filter(function (lib) { return lib.ItemId; })
+                        .map(function (lib) {
+                            const id = RoninConfig.normalizeLibraryId(lib.ItemId);
+                            const checked = selected.indexOf(id) !== -1 ? " checked" : "";
+                            return '<label class="checkboxContainer">'
+                                + '<input is="emby-checkbox" type="checkbox" class="roninLib" data-libid="' + RoninConfig.escapeHtml(id) + '"' + checked + '/>'
+                                + '<span>' + RoninConfig.escapeHtml(lib.Name) + ' <span style="opacity:.6">(' + RoninConfig.escapeHtml(lib.CollectionType || "mixed") + ')</span></span>'
+                                + '</label>';
+                        }).join("");
+                },
+
+                selectedLibraryIds: function () {
+                    return Array.prototype.slice.call(document.querySelectorAll(".roninLib"))
+                        .filter(function (cb) { return cb.checked; })
+                        .map(function (cb) { return cb.getAttribute("data-libid"); });
+                },
+
                 updateStates: function () {
                     const mode = document.querySelector("[data-id=AnimeIdentificationMode]").value;
                     const tagInput = document.querySelector("[data-id=AnimeTargetTag]");
@@ -135,8 +173,13 @@
                 loadConfig: function () {
                     console.log('Loading Ronin configuration...');
                     Dashboard.showLoadingMsg();
-                    window.ApiClient.getPluginConfiguration(RoninConfig.pluginId)
-                        .then(function (config) {
+                    Promise.all([
+                        window.ApiClient.getPluginConfiguration(RoninConfig.pluginId),
+                        window.ApiClient.getJSON(window.ApiClient.getUrl("Library/VirtualFolders"))
+                    ])
+                        .then(function (results) {
+                            const config = results[0];
+                            RoninConfig.renderLibraries(config, results[1]);
                             document.querySelector("[data-id=ShowBadgesOnEpisodePage]").checked = config.ShowBadgesOnEpisodePage;
                             document.querySelector("[data-id=ShowBadgesOnSeasonList]").checked = config.ShowBadgesOnSeasonList;
                             document.querySelector("[data-id=EnableBadgeColors]").checked = config.EnableBadgeColors;
@@ -178,7 +221,8 @@
                         AnimeTargetTag: document.querySelector("[data-id=AnimeTargetTag]").value,
                         RefreshSeriesAfterProcessed: document.querySelector("[data-id=RefreshSeriesAfterProcessed]").checked,
                         RenameWhenSingleSeason: document.querySelector("[data-id=RenameWhenSingleSeason]").checked,
-                        SingleSeasonName: document.querySelector("[data-id=SingleSeasonName]").value
+                        SingleSeasonName: document.querySelector("[data-id=SingleSeasonName]").value,
+                        LibraryIds: RoninConfig.selectedLibraryIds()
                     };
                     window.ApiClient.updatePluginConfiguration(RoninConfig.pluginId, config)
                     .then(Dashboard.processPluginConfigurationUpdateResult)

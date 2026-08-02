@@ -95,7 +95,7 @@ public class FillerUpdateTask : IScheduledTask
     {
         _logger.LogInformation("Starting Anime Filler Update Task");
 
-        var seriesList = CollectAnimeSeries.Execute(_libraryManager);
+        var seriesList = CollectAnimeSeries.Execute(_libraryManager, _config, _logger);
 
         progress?.Report(0);
 

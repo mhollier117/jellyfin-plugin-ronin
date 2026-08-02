@@ -41,12 +41,30 @@ public class SplitSeasonsTask : IScheduledTask
         IDirectoryService directoryService,
         ILogger<SplitSeasonsTask> logger,
         IHttpClientFactory httpClientFactory)
+        : this(libraryManager, directoryService, logger, httpClientFactory, Plugin.Instance?.Configuration ?? new PluginConfiguration())
+    {
+    }
+
+    /// <summary>
+    /// Initializes a new instance of the <see cref="SplitSeasonsTask"/> class with an explicit configuration (used by tests).
+    /// </summary>
+    /// <param name="libraryManager">The Jellyfin library manager used to query media items.</param>
+    /// <param name="directoryService">Service for directory operations.</param>
+    /// <param name="logger">Logger for diagnostic output.</param>
+    /// <param name="httpClientFactory">Factory for creating HTTP clients used for external API calls.</param>
+    /// <param name="configuration">The plugin configuration to use.</param>
+    internal SplitSeasonsTask(
+        ILibraryManager libraryManager,
+        IDirectoryService directoryService,
+        ILogger<SplitSeasonsTask> logger,
+        IHttpClientFactory httpClientFactory,
+        PluginConfiguration configuration)
     {
         _libraryManager = libraryManager;
         _directoryService = directoryService;
         _logger = logger;
         _httpClientFactory = httpClientFactory;
-        _config = Plugin.Instance?.Configuration ?? new PluginConfiguration();
+        _config = configuration;
     }
 
     /// <summary>
@@ -81,7 +99,15 @@ public class SplitSeasonsTask : IScheduledTask
     {
         _logger.LogInformation("Starting TVDB anime season splitting task");
 
-        var seriesList = CollectAnimeSeries.Execute(_libraryManager);
+        // Never race a library scan (same invariant as the merge task).
+        if (_libraryManager.IsScanRunning)
+        {
+            _logger.LogWarning("A library scan is running; aborting the split run. Re-run the task after the scan completes.");
+            progress?.Report(100);
+            return;
+        }
+
+        var seriesList = CollectAnimeSeries.Execute(_libraryManager, _config, _logger);
 
         progress?.Report(0);
 
@@ -120,6 +146,20 @@ public class SplitSeasonsTask : IScheduledTask
                 continue;
             }
 
+            // Existing season items by number: when the target season already
+            // exists we also write SeasonId/SeasonName (the server's own
+            // re-home recipe); when it does not, only ParentIndexNumber is
+            // written and the series refresh creates the virtual season.
+            var seasonsByNumber = _libraryManager.GetItemList(new InternalItemsQuery
+            {
+                Parent = series,
+                IncludeItemTypes = [BaseItemKind.Season]
+            })
+            .Cast<Season>()
+            .Where(s => s.IndexNumber.HasValue)
+            .GroupBy(s => s.IndexNumber!.Value)
+            .ToDictionary(g => g.Key, g => g.First());
+
             bool seriesModified = false;
             double episodeProcessed = 0;
 
@@ -136,7 +176,16 @@ public class SplitSeasonsTask : IScheduledTask
                     cancellationToken
                 ).ConfigureAwait(false);
 
-                if (seasonAiredNumber > 1 && episode.ParentIndexNumber != seasonAiredNumber)
+                var targetSeason = seasonsByNumber.TryGetValue(seasonAiredNumber, out var t) ? t : null;
+
+                var plan = SplitPlan.Compute(
+                    episode.ParentIndexNumber,
+                    episode.SeasonId,
+                    seasonAiredNumber,
+                    targetSeason?.Id,
+                    targetSeason?.Name);
+
+                if (plan.Outcome == PlanOutcome.Update)
                 {
                     _logger.LogInformation(
                         "Updating {Series} - {Episode}: Season {Old} → {New}",
@@ -145,17 +194,41 @@ public class SplitSeasonsTask : IScheduledTask
                         episode.ParentIndexNumber ?? 1,
                         seasonAiredNumber);
 
-                    episode.ParentIndexNumber = seasonAiredNumber;
-                    // episode.ParentId = Guid.Empty;
+                    // Never ParentId — scans destructively revert it (doc E2).
+                    if (plan.ParentIndexNumber.HasValue)
+                    {
+                        episode.ParentIndexNumber = plan.ParentIndexNumber;
+                    }
 
-                    await _libraryManager.UpdateItemAsync(
-                        episode,
-                        episode,
-                        ItemUpdateType.MetadataEdit,
-                        cancellationToken
-                    ).ConfigureAwait(false);
+                    if (plan.SeasonId.HasValue)
+                    {
+                        episode.SeasonId = plan.SeasonId.Value;
+                    }
 
-                    seriesModified = true;
+                    if (plan.SeasonName is not null)
+                    {
+                        episode.SeasonName = plan.SeasonName;
+                    }
+
+                    try
+                    {
+                        await _libraryManager.UpdateItemAsync(
+                            episode,
+                            episode.GetParent() ?? series,
+                            ItemUpdateType.MetadataEdit,
+                            cancellationToken
+                        ).ConfigureAwait(false);
+
+                        seriesModified = true;
+                    }
+                    catch (Exception ex) when (ex is not OperationCanceledException)
+                    {
+                        _logger.LogWarning(
+                            ex,
+                            "Skipping {Series} - {Episode}: update failed",
+                            series.Name,
+                            episode.Name);
+                    }
                 }
 
                 episodeProcessed++;
@@ -178,7 +251,9 @@ public class SplitSeasonsTask : IScheduledTask
                         ForceSave = true
                     };
 
-                    await series.ValidateChildren(new Progress<double>(), CancellationToken.None).ConfigureAwait(false);
+                    // No ValidateChildren: nothing was re-parented; the series
+                    // refresh creates missing virtual seasons and runs the
+                    // server's SeasonId fix-up (design doc D2.5).
                     await series.RefreshMetadata(refreshOptions, CancellationToken.None).ConfigureAwait(false);
                 }
                 catch (Exception ex)

@@ -18,11 +18,14 @@ public static class ResolveEpisodeNumber
 
     /// <summary>
     /// Resolves an absolute episode number from AniDB given an episode ID.
+    /// When a <paramref name="breaker"/> is supplied and open, no request is
+    /// sent; the breaker opens on the first HTTP 403 (AniDB blocks this host).
     /// </summary>
     /// <returns>The absolute episode number or null if not found.</returns>
-    public static async Task<int?> AbsoluteFromAniDbAsync(string? anidbEpisodeId, HttpClient client, int RequestDelayMs, CancellationToken cancellationToken)
+    public static async Task<int?> AbsoluteFromAniDbAsync(string? anidbEpisodeId, HttpClient client, int RequestDelayMs, CancellationToken cancellationToken, ScrapeCircuitBreaker? breaker = null)
     {
         if (string.IsNullOrEmpty(anidbEpisodeId)) return null;
+        if (breaker?.IsOpen == true) return null;
         var url = $"https://anidb.net/episode/{anidbEpisodeId}";
         using var response = await HttpRetry.SendWithRetryAsync(
             client,
@@ -35,7 +38,16 @@ public static class ResolveEpisodeNumber
             MaxAttempts,
             d => Task.Delay(d, cancellationToken),
             cancellationToken).ConfigureAwait(false);
-        if (response is null || !response.IsSuccessStatusCode) return null;
+        if (response is null) return null;
+        if (response.StatusCode == System.Net.HttpStatusCode.Forbidden)
+        {
+            // AniDB blocks this host; do not keep asking for every episode
+            // (design doc D2.3 — per-run circuit breaker).
+            breaker?.Trip();
+            return null;
+        }
+
+        if (!response.IsSuccessStatusCode) return null;
 
         var html = await response.Content.ReadAsStringAsync(cancellationToken).ConfigureAwait(false);
         var match = Regex.Match(html, @"- (\d+) -");

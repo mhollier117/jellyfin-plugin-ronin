@@ -61,7 +61,7 @@ public class FillerResetTask : IScheduledTask
     {
         _logger.LogInformation("Starting Anime Filler Tags Reset Task");
 
-        var seriesList = CollectAnimeSeries.Execute(_libraryManager);
+        var seriesList = CollectAnimeSeries.Execute(_libraryManager, _logger);
 
         double current = 0;
         double total = seriesList.Count;
