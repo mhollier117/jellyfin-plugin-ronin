@@ -68,6 +68,13 @@ public class PluginConfiguration : BasePluginConfiguration
     /// are hidden in the web UI. Presentation only; no library data changes.
     /// </summary>
     public bool HideEmptySeasons { get; set; } = true;
+
+    /// <summary>
+    /// Gets or sets a value indicating whether the merge/split tasks re-run
+    /// specials placement for each series they modified, so chronological
+    /// ordering is never stale after a re-org.
+    /// </summary>
+    public bool PlaceSpecialsAfterReorg { get; set; } = true;
 }
 
 /// <summary>

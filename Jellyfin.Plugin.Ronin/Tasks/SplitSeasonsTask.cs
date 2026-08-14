@@ -286,6 +286,22 @@ public class SplitSeasonsTask : IScheduledTask
                 }
             }
 
+            // Same rationale as the merge task: ordering must follow the
+            // structure change in the same pass, now targeting aired-season
+            // numbering again.
+            if (Config.PlaceSpecialsAfterReorg && seriesModified)
+            {
+                try
+                {
+                    await PlaceSpecials.ExecuteForSeriesAsync(
+                        _libraryManager, series, _logger, cancellationToken).ConfigureAwait(false);
+                }
+                catch (Exception ex) when (ex is not OperationCanceledException)
+                {
+                    _logger.LogWarning(ex, "Specials placement failed for {Series}", series.Name);
+                }
+            }
+
             seriesProcessed++;
         }
 

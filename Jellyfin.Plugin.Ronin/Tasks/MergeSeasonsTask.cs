@@ -362,6 +362,23 @@ public class MergeAnimeSeasonsTask : IScheduledTask
                 }
             }
 
+            // Re-place specials in the same pass that changed the season
+            // structure: after a merge their AirsBefore targets must use the
+            // new (absolute) numbering, and doing it here means ordering is
+            // never stale between a reorg and an external sweep.
+            if (Config.PlaceSpecialsAfterReorg && seriesModified && series != null)
+            {
+                try
+                {
+                    await PlaceSpecials.ExecuteForSeriesAsync(
+                        _libraryManager, series, _logger, cancellationToken).ConfigureAwait(false);
+                }
+                catch (Exception ex) when (ex is not OperationCanceledException)
+                {
+                    _logger.LogWarning(ex, "Specials placement failed for {Series}", series?.Name);
+                }
+            }
+
             seriesProcessed++;
         }
 
