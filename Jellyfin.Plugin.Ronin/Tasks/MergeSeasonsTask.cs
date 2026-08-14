@@ -183,6 +183,27 @@ public class MergeAnimeSeasonsTask : IScheduledTask
 
             bool renumberNeeded = !Numbering.IsAbsoluteNumbering(numberedPairs);
 
+            // Resolver pairs INCLUDE virtual episodes: after a first merge,
+            // real prior seasons are empty (their episodes moved to season 1)
+            // and the gapless guard could never pass again - but the server
+            // regenerates VIRTUAL rows for merged-away seasons from provider
+            // metadata, which is precisely the aired season structure the
+            // local resolver needs. Locally cached, no network, provable.
+            // (2026-08-14: 16 TenSura episodes were unresolvable post-merge
+            // until virtual rows were admitted here.)
+            var resolverPairs = _libraryManager.GetItemList(new InternalItemsQuery
+            {
+                Parent = series,
+                IncludeItemTypes = new[] { BaseItemKind.Episode },
+                Recursive = true
+            })
+                .OfType<Episode>()
+                .Where(e => e.ParentIndexNumber > 0
+                            && e.IndexNumber.HasValue && e.IndexNumber > 0)
+                .Select(e => (e.ParentIndexNumber!.Value, e.IndexNumber!.Value))
+                .Distinct()
+                .ToList();
+
             // Slots already occupied in season 1 - the collision guard below
             // refuses to renumber a second episode onto any of them.
             var usedAbsoluteNumbers = new HashSet<int>(
@@ -236,7 +257,7 @@ public class MergeAnimeSeasonsTask : IScheduledTask
                     if (!resolvedAbsolute.HasValue || resolvedAbsolute <= 0)
                     {
                         resolvedAbsolute = LocalOrderResolver.Compute(
-                            numberedPairs,
+                            resolverPairs,
                             episode.ParentIndexNumber ?? -1,
                             episode.IndexNumber ?? -1);
                     }
