@@ -183,6 +183,13 @@ public class MergeAnimeSeasonsTask : IScheduledTask
 
             bool renumberNeeded = !Numbering.IsAbsoluteNumbering(numberedPairs);
 
+            // Slots already occupied in season 1 - the collision guard below
+            // refuses to renumber a second episode onto any of them.
+            var usedAbsoluteNumbers = new HashSet<int>(
+                episodes
+                    .Where(e => e.ParentIndexNumber == 1 && e.IndexNumber.HasValue)
+                    .Select(e => e.IndexNumber!.Value));
+
             foreach (var episode in episodes)
             {
                 cancellationToken.ThrowIfCancellationRequested();
@@ -220,6 +227,39 @@ public class MergeAnimeSeasonsTask : IScheduledTask
                             aniDbDisabledLogged = true;
                         }
                     }
+
+                    // --- 3. Network-free fallback: local aired order with a
+                    // gapless guard. 2026-08-14: Solo Leveling S2 had no Tvdb
+                    // episode ids and TenSura's TVDB scrapes failed - 29
+                    // episodes skipped every run. When the library itself is
+                    // provably gapless, the ordinal IS the absolute number.
+                    if (!resolvedAbsolute.HasValue || resolvedAbsolute <= 0)
+                    {
+                        resolvedAbsolute = LocalOrderResolver.Compute(
+                            numberedPairs,
+                            episode.ParentIndexNumber ?? -1,
+                            episode.IndexNumber ?? -1);
+                    }
+                }
+
+                // Collision guard: never renumber onto an absolute slot
+                // another episode already holds. 2026-08-14: Solo Leveling's
+                // S2 episodes carried S1's AniDB ids (AniDB models sequels
+                // as separate series), so a "successful" AniDB lookup would
+                // have renumbered S2E1 onto S1E1 and the import would have
+                // overwritten it - only the unresolved-skip saved the data.
+                // Wrong remote answers must be structurally harmless.
+                if (resolvedAbsolute.HasValue
+                    && !usedAbsoluteNumbers.Add(resolvedAbsolute.Value))
+                {
+                    _logger.LogWarning(
+                        "Skipping {Series} - {Episode}: resolved absolute number {Number} is already taken - remote metadata is inconsistent",
+                        series?.Name,
+                        episode.Name,
+                        resolvedAbsolute.Value);
+                    episodeProcessed++;
+                    progress?.Report((seriesProcessed + (episodeProcessed / episodes.Count)) / seriesList.Count * 100);
+                    continue;
                 }
 
                 var plan = MergePlan.Compute(
