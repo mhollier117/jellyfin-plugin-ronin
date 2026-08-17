@@ -221,10 +221,17 @@ public class SplitSeasonsTask : IScheduledTask
                     seasonAiredNumber = aired.Season;
                     airedEpisodeNumber = aired.Episode;
                 }
-                else if (episode.GetProviderId("Tvdb") is not null
+                else if (episode.ParentIndexNumber != 1
+                         && episode.GetProviderId("Tvdb") is not null
                          && (!string.IsNullOrEmpty(tvdbId)
                              || !string.IsNullOrEmpty(tvdbSlug)))
                 {
+                    // Scrape fallback resolves the aired SEASON only and
+                    // keeps the episode number - safe for correcting drift
+                    // on rows already in aired seasons, CORRUPT for merged
+                    // (absolute-numbered) season-1 rows: measured 2026-08-17,
+                    // it produced S3E62 / S6E116-style rows. Merged rows move
+                    // via the date-join map or not at all.
                     seasonAiredNumber = await ResolveSeasonNumber.AiredFromTvdbAsync(
                         tvdbId,
                         tvdbSlug,
