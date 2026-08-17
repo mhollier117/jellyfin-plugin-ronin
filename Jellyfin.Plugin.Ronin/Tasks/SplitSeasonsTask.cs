@@ -145,13 +145,6 @@ public class SplitSeasonsTask : IScheduledTask
             var tvdbId = series.GetProviderId("Tvdb");
             var tvdbSlug = series.GetProviderId("TvdbSlug");
 
-            if (string.IsNullOrEmpty(tvdbId) && string.IsNullOrEmpty(tvdbSlug))
-            {
-                seriesProcessed++;
-                progress?.Report(seriesProcessed / seriesList.Count * 100);
-                continue;
-            }
-
             var episodes = _libraryManager.GetItemList(new InternalItemsQuery
             {
                 Parent = series,
@@ -160,8 +153,32 @@ public class SplitSeasonsTask : IScheduledTask
                 IsVirtualItem = false
             })
             .Cast<Episode>()
-            .Where(e => e.GetProviderId("Tvdb") != null)
             .ToList();
+
+            // Date-join identity map: recovers aired (season, episode) for
+            // merged rows from the VIRTUAL rows' provider structure - works
+            // with no per-episode Tvdb ids (AniDB-only libraries) and no
+            // season-size assumptions (a merged season-1 blob poisons
+            // those). Rules D1-D7 in AiredIdentityMapTests. The TVDB scrape
+            // below remains the fallback for unmapped rows that do carry
+            // ids; rows with neither are skipped untouched.
+            var virtualRows = _libraryManager.GetItemList(new InternalItemsQuery
+            {
+                Parent = series,
+                IncludeItemTypes = [BaseItemKind.Episode],
+                Recursive = true,
+                IsVirtualItem = true
+            })
+            .Cast<Episode>()
+            .Where(e => e.ParentIndexNumber.HasValue && e.IndexNumber.HasValue)
+            .Select(e => new VirtualEpisodeRef(
+                e.ParentIndexNumber!.Value, e.IndexNumber!.Value, e.PremiereDate))
+            .ToList();
+            var mergedRows = episodes
+                .Where(e => e.ParentIndexNumber == 1 && e.IndexNumber.HasValue)
+                .Select(e => new RealEpisodeRef(e.IndexNumber!.Value, e.PremiereDate))
+                .ToList();
+            var identity = AiredIdentityMap.Build(mergedRows, virtualRows);
 
             if (episodes.Count == 0)
             {
@@ -191,14 +208,38 @@ public class SplitSeasonsTask : IScheduledTask
             {
                 cancellationToken.ThrowIfCancellationRequested();
 
-                var seasonAiredNumber = await ResolveSeasonNumber.AiredFromTvdbAsync(
-                    tvdbId,
-                    tvdbSlug,
-                    episode.GetProviderId("Tvdb"),
-                    client,
-                    RequestDelayMs,
-                    cancellationToken
-                ).ConfigureAwait(false);
+                int seasonAiredNumber;
+                int? airedEpisodeNumber = null;
+                if (episode.ParentIndexNumber == 1
+                    && episode.IndexNumber.HasValue
+                    && identity.TryGetValue(episode.IndexNumber.Value, out var aired))
+                {
+                    // Date-joined identity: both aired numbers known, no
+                    // network. Also fixes the historic "preserve episode
+                    // numbers" behavior, which is wrong for merged-absolute
+                    // rows (S17E410-style results).
+                    seasonAiredNumber = aired.Season;
+                    airedEpisodeNumber = aired.Episode;
+                }
+                else if (episode.GetProviderId("Tvdb") is not null
+                         && (!string.IsNullOrEmpty(tvdbId)
+                             || !string.IsNullOrEmpty(tvdbSlug)))
+                {
+                    seasonAiredNumber = await ResolveSeasonNumber.AiredFromTvdbAsync(
+                        tvdbId,
+                        tvdbSlug,
+                        episode.GetProviderId("Tvdb"),
+                        client,
+                        RequestDelayMs,
+                        cancellationToken
+                    ).ConfigureAwait(false);
+                }
+                else
+                {
+                    episodeProcessed++;
+                    progress?.Report((seriesProcessed + (episodeProcessed / episodes.Count)) / seriesList.Count * 100);
+                    continue;      // no identity source - skip untouched
+                }
 
                 var targetSeason = seasonsByNumber.TryGetValue(seasonAiredNumber, out var t) ? t : null;
 
@@ -208,6 +249,10 @@ public class SplitSeasonsTask : IScheduledTask
                     seasonAiredNumber,
                     targetSeason?.Id,
                     targetSeason?.Name);
+                if (plan.Outcome == PlanOutcome.Update && airedEpisodeNumber.HasValue)
+                {
+                    plan = plan with { IndexNumber = airedEpisodeNumber };
+                }
 
                 if (plan.Outcome == PlanOutcome.Update)
                 {
@@ -232,6 +277,11 @@ public class SplitSeasonsTask : IScheduledTask
                     if (plan.SeasonName is not null)
                     {
                         episode.SeasonName = plan.SeasonName;
+                    }
+
+                    if (plan.IndexNumber.HasValue)
+                    {
+                        episode.IndexNumber = plan.IndexNumber;
                     }
 
                     try
