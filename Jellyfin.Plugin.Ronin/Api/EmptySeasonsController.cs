@@ -96,8 +96,17 @@ public class EmptySeasonsController : ControllerBase
 
             inScopeCount += group.Count();
 
-            // Virtual placeholders are intentionally included: a season whose
-            // only content is missing-episode placeholders still has a view.
+            // Virtual placeholders are EXCLUDED. They used to count as
+            // content, on the reasoning that a season of missing episodes
+            // still has a view - but that made the merged look unreachable by
+            // construction. Measured 2026-09-05 on a 411-episode library:
+            // every real episode's SeasonId pointed at Season 1, yet seasons
+            // 2-17 each still held 16-50 virtual rows pointing at themselves,
+            // so every season counted as referenced and the endpoint returned
+            // nothing. Jellyfin regenerates those rows from provider metadata
+            // for every season the provider knows about, so they can never be
+            // drained. A placeholder for an episode that now lives in Season 1
+            // is a duplicate, not content.
             var episodeSeasonIds = _libraryManager.GetItemList(new InternalItemsQuery
             {
                 Parent = series,
@@ -105,6 +114,7 @@ public class EmptySeasonsController : ControllerBase
                 Recursive = true
             })
             .OfType<Episode>()
+            .Where(e => !e.IsVirtualItem)
             .Select(e => e.SeasonId);
 
             hidden.AddRange(EmptySeasons

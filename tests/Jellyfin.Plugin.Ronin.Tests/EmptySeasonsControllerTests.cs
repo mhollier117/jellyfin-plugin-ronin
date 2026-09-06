@@ -128,4 +128,55 @@ public sealed class EmptySeasonsControllerTests
 
         Assert.Empty(Invoke(controller, rig.Season2.Id));
     }
+
+    // 2026-09-05: after a successful Force Single Season merge, NO season was
+    // ever hidden. Measured on a 411-episode Bleach library: every real
+    // episode's SeasonId pointed at Season 1, yet seasons 2-17 each still held
+    // 16-50 VIRTUAL placeholder rows whose SeasonId pointed at themselves, so
+    // every season counted as "referenced" and the endpoint returned [].
+    //
+    // Jellyfin regenerates those placeholders from provider metadata for every
+    // season the provider knows about, so counting them as content makes the
+    // merged look unreachable by construction. A placeholder for an episode
+    // that now lives in Season 1 is a duplicate, not content.
+    [Fact]
+    public void SeasonWhoseOnlyContentIsVirtualPlaceholdersIsHidden()
+    {
+        var rig = new Rig();
+        rig.Episodes.Add(new Episode
+        {
+            Id = Guid.NewGuid(),
+            ParentIndexNumber = 2,
+            IndexNumber = 1,
+            ParentId = rig.Season2.Id,
+            SeasonId = rig.Season2.Id,
+            IsVirtualItem = true,
+        });
+        var controller = rig.CreateController(ScopedConfig());
+
+        var hidden = Invoke(controller, rig.Season1.Id, rig.Season2.Id);
+
+        Assert.Equal(new[] { rig.Season2.Id.ToString("N") }, hidden);
+    }
+
+    [Fact]
+    public void SeasonWithARealEpisodeIsStillKept()
+    {
+        // The guard on the above: a season holding an actual file must never
+        // be hidden, or the merged look would swallow real content.
+        var rig = new Rig();
+        rig.Episodes.Add(new Episode
+        {
+            Id = Guid.NewGuid(),
+            ParentIndexNumber = 2,
+            IndexNumber = 1,
+            ParentId = rig.Season2.Id,
+            SeasonId = rig.Season2.Id,
+            IsVirtualItem = false,
+        });
+        var controller = rig.CreateController(ScopedConfig());
+
+        Assert.DoesNotContain(rig.Season2.Id.ToString("N"),
+            Invoke(controller, rig.Season1.Id, rig.Season2.Id));
+    }
 }
