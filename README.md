@@ -23,6 +23,18 @@
 > - The merge task reports `Failed` when a series resolves nothing, instead of a silent `Completed`
 > - Seasons whose only remaining content is virtual placeholders are hidden after a merge
 
+> ### Data attribution
+>
+> Metadata and episode ordering may be retrieved from **[TheTVDB](https://thetvdb.com)**
+> and **[AniDB](https://anidb.net)**. TheTVDB's free API tier requires attribution:
+> series and episode information is provided by TheTVDB. Please consider
+> [supporting TheTVDB](https://thetvdb.com/subscribe).
+>
+> Configure a TheTVDB API key in the plugin settings to resolve absolute episode
+> numbers from the official API. Without it Ronin falls back to scraping and then
+> to counting local files — and a local count is only as complete as your library,
+> so a series with missing episodes can end up numbered inconsistently.
+
 ---
 Ronin is a Jellyfin plugin designed as a focused toolbox to improve, expand, and refine the anime management experience on your media server. It provides a set of opt-in tasks that help normalize anime libraries, where metadata providers, season layouts, and episode numbering are often inconsistent or misleading.
 

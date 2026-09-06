@@ -136,6 +136,23 @@ public class MergeAnimeSeasonsTask : IScheduledTask
         int totalSkipped = 0;
         int seriesResolvedNothing = 0;
 
+        // AUTHORITATIVE resolver. The API returns the complete aired order
+        // including episodes the user does not own, so numbering stays correct
+        // when a season has gaps - unlike the local order, which can only count
+        // files present and therefore disagrees with anything already resolved
+        // remotely (the 2026-09-06 Mushoku Tensei collision). One login per run.
+        var tvdbApi = new TvdbApiClient(httpClient, _logger, RequestDelayMs);
+        var tvdbReady = await tvdbApi.LoginAsync(
+            Config.TvdbApiKey, Config.TvdbSubscriberPin, cancellationToken).ConfigureAwait(false);
+        if (tvdbReady)
+        {
+            _logger.LogInformation("TheTVDB API authenticated; using it as the primary resolver");
+        }
+        else if (!string.IsNullOrWhiteSpace(Config.TvdbApiKey))
+        {
+            _logger.LogWarning("TheTVDB API key present but unusable; falling back to scrape/local resolvers");
+        }
+
         foreach (var series in seriesList)
         {
             cancellationToken.ThrowIfCancellationRequested();
@@ -252,6 +269,21 @@ public class MergeAnimeSeasonsTask : IScheduledTask
                 }
             }
 
+            // One API call per series, reused for every episode below.
+            IReadOnlyDictionary<(int Season, int Episode), int> tvdbMap =
+                new Dictionary<(int, int), int>();
+            if (tvdbReady && series != null)
+            {
+                tvdbMap = await tvdbApi.GetAbsoluteMapAsync(
+                    series.GetProviderId("Tvdb"), cancellationToken).ConfigureAwait(false);
+                if (tvdbMap.Count > 0)
+                {
+                    _logger.LogInformation(
+                        "TheTVDB absolute map for {Series}: {Count} episodes",
+                        series.Name, tvdbMap.Count);
+                }
+            }
+
             // Slots already occupied in season 1 - the collision guard below
             // refuses to renumber a second episode onto any of them.
             var usedAbsoluteNumbers = new HashSet<int>(
@@ -266,8 +298,22 @@ public class MergeAnimeSeasonsTask : IScheduledTask
                 int? resolvedAbsolute = null;
                 if (renumberNeeded && episode.ParentIndexNumber != 1)
                 {
+                    // --- 0. The API map, when a key is configured. Verified
+                    // numbers beat any count derived from what happens to be
+                    // on disk, and it is the only source that is complete when
+                    // episodes are missing. ---
+                    if (tvdbMap.Count > 0
+                        && episode.ParentIndexNumber.HasValue && episode.IndexNumber.HasValue
+                        && tvdbMap.TryGetValue(
+                            (episode.ParentIndexNumber.Value, episode.IndexNumber.Value),
+                            out var apiAbsolute)
+                        && apiAbsolute > 0)
+                    {
+                        resolvedAbsolute = apiAbsolute;
+                    }
+
                     // --- 1. Try TVDB first (AniDB 403-blocks this host) ---
-                    if (series != null)
+                    if (series != null && (!resolvedAbsolute.HasValue || resolvedAbsolute <= 0))
                     {
                         resolvedAbsolute = await ResolveEpisodeNumber.AbsoluteFromTvdbAsync(
                             series.GetProviderId("Tvdb"),
