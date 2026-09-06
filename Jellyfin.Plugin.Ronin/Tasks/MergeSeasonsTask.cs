@@ -473,6 +473,73 @@ public class MergeAnimeSeasonsTask : IScheduledTask
                 progress?.Report((seriesProcessed + (episodeProcessed / episodes.Count)) / seriesList.Count * 100);
             }
 
+            // === Reconcile episodes ALREADY in season 1 ===
+            // MergePlan treats an episode already in season 1 as a no-op, so a
+            // number assigned by the pre-API resolvers persists forever even
+            // once the authority is available. Audited 2026-09-06: World
+            // Trigger's season 3 sat uniformly +12, and one Mushoku Tensei
+            // episode was -2 AND squatting on the slot a still-unmerged
+            // episode needed. Runs even when nothing merged this pass, which is
+            // exactly the World Trigger case.
+            //
+            // Only ever acts on numbers the API supplied - never a local guess -
+            // and the planner declines wholesale unless the resulting layout is
+            // a clean bijection.
+            if (tvdbMap.Count > 0)
+            {
+                var reconcileItems = new List<ReconcileItem>();
+                foreach (var ep in episodes)
+                {
+                    if (ep.ParentIndexNumber != 1)
+                    {
+                        continue;
+                    }
+
+                    var coords = EpisodePathLayout.TryParse(ep.Path);
+                    if (coords is null)
+                    {
+                        continue;
+                    }
+
+                    reconcileItems.Add(new ReconcileItem(
+                        ep.Id, coords.Value.Season, coords.Value.Episode, ep.IndexNumber));
+                }
+
+                var fixes = ReconcilePlan.Compute(reconcileItems, tvdbMap);
+                foreach (var (id, newIndex) in fixes)
+                {
+                    cancellationToken.ThrowIfCancellationRequested();
+                    if (_libraryManager.GetItemById(id) is not Episode target)
+                    {
+                        continue;
+                    }
+
+                    _logger.LogInformation(
+                        "Correcting {Series} - {Episode}: absolute {Old} -> {New} (TheTVDB)",
+                        series?.Name, target.Name, target.IndexNumber, newIndex);
+                    target.IndexNumber = newIndex;
+                    await _libraryManager.UpdateItemAsync(
+                        target,
+                        target.GetParent() ?? target,
+                        ItemUpdateType.MetadataEdit,
+                        cancellationToken).ConfigureAwait(false);
+                    seriesModified = true;
+                    totalMerged++;
+                }
+
+                if (fixes.Count > 0)
+                {
+                    _logger.LogInformation(
+                        "{Series}: corrected {Count} absolute numbers against TheTVDB",
+                        series?.Name, fixes.Count);
+                }
+                else if (reconcileItems.Count > 0)
+                {
+                    _logger.LogDebug(
+                        "{Series}: no absolute-number corrections needed", series?.Name);
+                }
+            }
+
             if (RefreshSeriesAfterProcessed && seriesModified)
             {
                 try
