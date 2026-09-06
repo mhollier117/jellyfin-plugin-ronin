@@ -1,4 +1,4 @@
-using System;
+﻿using System;
 using System.Collections.Generic;
 using System.Linq;
 using System.Net.Http;
@@ -129,6 +129,12 @@ public class MergeAnimeSeasonsTask : IScheduledTask
         var aniDbBreaker = new ScrapeCircuitBreaker();
         bool aniDbDisabledLogged = false;
         double seriesProcessed = 0;
+        // Run tallies. Without these the task reported Completed while
+        // skipping 474 of 474 episodes (2026-09-05) and the regression that
+        // caused it survived undetected for weeks.
+        int totalMerged = 0;
+        int totalSkipped = 0;
+        int seriesResolvedNothing = 0;
 
         foreach (var series in seriesList)
         {
@@ -172,6 +178,8 @@ public class MergeAnimeSeasonsTask : IScheduledTask
 
             bool seriesModified = false;
             double episodeProcessed = 0;
+            int seriesMerged = 0;
+            int seriesSkipped = 0;
 
             // Skip external lookups entirely when the numbering is already
             // absolute: distinct and strictly increasing across seasons,
@@ -318,6 +326,8 @@ public class MergeAnimeSeasonsTask : IScheduledTask
                         series?.Name,
                         episode.Name,
                         resolvedAbsolute.Value);
+                    seriesSkipped++;
+                    totalSkipped++;
                     episodeProcessed++;
                     progress?.Report((seriesProcessed + (episodeProcessed / episodes.Count)) / seriesList.Count * 100);
                     continue;
@@ -341,6 +351,8 @@ public class MergeAnimeSeasonsTask : IScheduledTask
                         "Skipping {Series} - {Episode}: absolute episode number unresolved",
                         series?.Name,
                         episode.Name);
+                    seriesSkipped++;
+                    totalSkipped++;
                     episodeProcessed++;
                     progress?.Report((seriesProcessed + (episodeProcessed / episodes.Count)) / seriesList.Count * 100);
                     continue;
@@ -359,6 +371,8 @@ public class MergeAnimeSeasonsTask : IScheduledTask
                     episode.Name,
                     episode.ParentIndexNumber
                 );
+                seriesMerged++;
+                totalMerged++;
 
                 // The server's own re-home recipe (SeriesMetadataService.cs:
                 // 279-292): ParentIndexNumber + SeasonId + SeasonName.
@@ -480,10 +494,51 @@ public class MergeAnimeSeasonsTask : IScheduledTask
                 }
             }
 
+            // Surface a series that resolved NOTHING even when the run as a
+            // whole made progress - otherwise one broken series hides behind
+            // seventeen healthy ones.
+            if (MergeRunSummary.SeriesResolvedNothingOutright(seriesMerged, seriesSkipped))
+            {
+                seriesResolvedNothing++;
+                _logger.LogWarning(
+                    "{Series}: resolved nothing - {Skipped} episodes skipped, 0 merged",
+                    series?.Name,
+                    seriesSkipped);
+            }
+            else if (seriesSkipped > 0)
+            {
+                _logger.LogInformation(
+                    "{Series}: {Merged} merged, {Skipped} skipped",
+                    series?.Name,
+                    seriesMerged,
+                    seriesSkipped);
+            }
+
             seriesProcessed++;
         }
 
         progress?.Report(100);
-        _logger.LogInformation("Finished merging all anime seasons into season 1.");
+
+        var summary = new MergeRunSummary(
+            seriesList.Count, totalMerged, totalSkipped, seriesResolvedNothing);
+        if (summary.IsTotalFailure)
+        {
+            // Do NOT report success for a run that achieved nothing. Throwing
+            // is what makes Jellyfin mark the task Failed in the task list;
+            // logging alone left the 2026-09-05 regression invisible.
+            _logger.LogError("Merge run resolved nothing: {Summary}", summary.Describe());
+            throw new InvalidOperationException(
+                "Merge Anime Seasons made no progress on at least one series: "
+                + summary.Describe());
+        }
+
+        if (summary.IsPartial)
+        {
+            _logger.LogWarning("Finished with unresolved episodes: {Summary}", summary.Describe());
+        }
+        else
+        {
+            _logger.LogInformation("Finished merging all anime seasons into season 1. {Summary}", summary.Describe());
+        }
     }
 }
