@@ -1,4 +1,4 @@
-<!DOCTYPE html>
+﻿<!DOCTYPE html>
 <html lang="en">
 <head>
     <meta charset="utf-8">
@@ -58,6 +58,20 @@
                     <label class="inputLabel inputLabel-float inputLabelUnfocused" for="DbRateLimitMs"></label>
                     <input id="DbRateLimitMs" type="text" is="emby-input" class="emby-input" data-id="DbRateLimitMs" />
                     <div class="fieldDescription">Specifies the minimum delay, in milliseconds, between external database API requests (AniDB, TheTVDB, etc.). A value of 2000 ms or higher is recommended to comply with rate limits and avoid temporary blocks.</div>
+                </div>
+
+                <div class="inputContainer">
+                    <label class="inputLabel inputLabelUnfocused" for="TvdbApiKey">TheTVDB API key</label>
+                    <label class="inputLabel inputLabel-float inputLabelUnfocused" for="TvdbApiKey"></label>
+                    <input id="TvdbApiKey" type="password" is="emby-input" class="emby-input" data-id="TvdbApiKey" autocomplete="off" />
+                    <div class="fieldDescription">Used to resolve absolute episode numbers from the official API instead of scraping. Strongly recommended: the API returns the complete aired order <em>including episodes you do not own</em>, which is the only way numbering stays correct when a season has gaps. Without it the resolver falls back to counting local files, which can disagree with episodes already numbered remotely and leave a series half-merged. A free key is available at <a href="https://thetvdb.com/api-information" target="_blank" rel="noopener">thetvdb.com/api-information</a>.</div>
+                </div>
+
+                <div class="inputContainer">
+                    <label class="inputLabel inputLabelUnfocused" for="TvdbSubscriberPin">TheTVDB subscriber PIN (optional)</label>
+                    <label class="inputLabel inputLabel-float inputLabelUnfocused" for="TvdbSubscriberPin"></label>
+                    <input id="TvdbSubscriberPin" type="password" is="emby-input" class="emby-input" data-id="TvdbSubscriberPin" autocomplete="off" />
+                    <div class="fieldDescription">Only needed for a user-supported subscriber key. Leave empty for a standard project API key.</div>
                 </div>
 
                 <div class="inputContainer">
@@ -211,6 +225,8 @@
                                     ? config.SingleSeasonName
                                     : 'Episodes';
                             document.querySelector("[data-id=HideEmptySeasons]").checked = config.HideEmptySeasons !== false;
+                            document.querySelector("[data-id=TvdbApiKey]").value = config.TvdbApiKey || "";
+                            document.querySelector("[data-id=TvdbSubscriberPin]").value = config.TvdbSubscriberPin || "";
                             RoninConfig.updateStates();
                         })
                         .catch(function (error) {
@@ -236,6 +252,8 @@
                         RenameWhenSingleSeason: document.querySelector("[data-id=RenameWhenSingleSeason]").checked,
                         SingleSeasonName: document.querySelector("[data-id=SingleSeasonName]").value,
                         HideEmptySeasons: document.querySelector("[data-id=HideEmptySeasons]").checked,
+                        TvdbApiKey: document.querySelector("[data-id=TvdbApiKey]").value.trim(),
+                        TvdbSubscriberPin: document.querySelector("[data-id=TvdbSubscriberPin]").value.trim(),
                         LibraryIds: RoninConfig.selectedLibraryIds()
                     };
                     window.ApiClient.updatePluginConfiguration(RoninConfig.pluginId, config)

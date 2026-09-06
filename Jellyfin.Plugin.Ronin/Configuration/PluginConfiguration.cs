@@ -29,6 +29,29 @@ public class PluginConfiguration : BasePluginConfiguration
     public int DbRateLimitMs { get; set; } = 2000;
 
     /// <summary>
+    /// Gets or sets the TheTVDB v4 API key used to resolve absolute episode numbers.
+    /// <para>
+    /// Without a key the resolver falls back to scraping thetvdb.com HTML, which is
+    /// fragile, and to AniDB, which answers 403 Forbidden to scrapes. Both failing is
+    /// what forces the local-order fallback, and the local order can only count
+    /// episodes you actually hold - so a series with missing episodes gets numbers
+    /// that disagree with any already resolved remotely, and the merge collides.
+    /// </para>
+    /// <para>
+    /// The API answers with the complete aired order including episodes you do not
+    /// own, which is the only source that stays correct with gaps. A free key is
+    /// available at https://thetvdb.com/api-information.
+    /// </para>
+    /// </summary>
+    public string TvdbApiKey { get; set; } = string.Empty;
+
+    /// <summary>
+    /// Gets or sets the optional TheTVDB subscriber PIN. Only required for
+    /// user-supported ("v4 user") keys; leave empty for a project API key.
+    /// </summary>
+    public string TvdbSubscriberPin { get; set; } = string.Empty;
+
+    /// <summary>
     /// Determines how anime series are identified (Genre, Tag, or combination).
     /// </summary>
     public AnimeIdentificationMode AnimeIdentificationMode { get; set; }
