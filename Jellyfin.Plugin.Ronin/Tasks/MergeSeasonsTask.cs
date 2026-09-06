@@ -204,6 +204,46 @@ public class MergeAnimeSeasonsTask : IScheduledTask
                 .Distinct()
                 .ToList();
 
+            // Virtual rows repair the seasons the merge EMPTIED, but not the
+            // season it POLLUTED. After a partial run season 1 holds the
+            // merged episodes under their absolute numbers, so L3's
+            // "contiguous from 1" test fails on season 1 itself and every
+            // remaining episode is skipped for good. Measured 2026-09-05:
+            // season 1 held 174 episodes ranging 1..412, and 474 of 474
+            // Bleach episodes were skipped "absolute episode number
+            // unresolved" on every run.
+            //
+            // The file PATH is the one input the merge never rewrites, so it
+            // still describes the original aired layout. Prefer it, unioned
+            // with the virtual rows so undownloaded episodes keep their slot.
+            // All-or-nothing inside Build(): a partially parsed layout would
+            // read as holes and poison every later offset.
+            var pathPairs = EpisodePathLayout.Build(episodes.Select(e => e.Path));
+            if (pathPairs is not null)
+            {
+                var virtualPairs = _libraryManager.GetItemList(new InternalItemsQuery
+                {
+                    Parent = series,
+                    IncludeItemTypes = new[] { BaseItemKind.Episode },
+                    Recursive = true,
+                    IsVirtualItem = true
+                })
+                    .OfType<Episode>()
+                    .Where(e => e.ParentIndexNumber > 0
+                                && e.IndexNumber.HasValue && e.IndexNumber > 0)
+                    .Select(e => (e.ParentIndexNumber!.Value, e.IndexNumber!.Value));
+
+                var merged = pathPairs.Concat(virtualPairs).Distinct().ToList();
+                if (merged.Count > 0)
+                {
+                    _logger.LogInformation(
+                        "Using path-derived layout for {Series}: {Count} episode slots",
+                        series?.Name,
+                        merged.Count);
+                    resolverPairs = merged;
+                }
+            }
+
             // Slots already occupied in season 1 - the collision guard below
             // refuses to renumber a second episode onto any of them.
             var usedAbsoluteNumbers = new HashSet<int>(
