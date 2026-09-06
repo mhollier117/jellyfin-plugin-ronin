@@ -1,6 +1,28 @@
 # Ronin: An Anime Toolkit for Jellyfin
 
 ![Ronin logo](Images/logo.jpg)
+
+> ### Credit
+>
+> **Ronin was created by [ahza-code](https://github.com/ahza-code).** This repository is a
+> downstream fork of [ahza-code/jellyfin-plugin-ronin](https://github.com/ahza-code/jellyfin-plugin-ronin),
+> maintained by [mhollier117](https://github.com/mhollier117).
+>
+> All original design and implementation credit belongs upstream. This fork exists to carry
+> multi-ABI builds and additional fixes, and is distributed under the same
+> [GPL-3.0](LICENSE) license as the original.
+>
+> *(Note: this repository was created independently rather than through GitHub's fork button,
+> so GitHub does not display a "forked from" banner. The relationship is stated here instead.)*
+>
+> **Changes in this fork** (per GPL-3.0 §5(a), which requires modified versions to carry
+> prominent notice of change):
+> - Multi-ABI release builds (Jellyfin 10.10.x, 10.11.x, 12.0)
+> - Retry and error-isolation fixes in the scrape fallbacks
+> - Merge layout rebuilt from file paths, so the season merge cannot self-block
+> - The merge task reports `Failed` when a series resolves nothing, instead of a silent `Completed`
+> - Seasons whose only remaining content is virtual placeholders are hidden after a merge
+
 ---
 Ronin is a Jellyfin plugin designed as a focused toolbox to improve, expand, and refine the anime management experience on your media server. It provides a set of opt-in tasks that help normalize anime libraries, where metadata providers, season layouts, and episode numbering are often inconsistent or misleading.
 
